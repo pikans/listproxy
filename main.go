@@ -3,6 +3,7 @@ package main
 import "flag"
 
 import (
+        "context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/asn1"
@@ -13,7 +14,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"rsc.io/letsencrypt"
+	"golang.org/x/crypto/acme/autocert"
 	"strings"
 
 	"gopkg.in/ldap.v2"
@@ -76,16 +77,13 @@ func run(register, listenhttp, listenhttps, authenticate, authorize, proxy, stat
 	}
 	reverseProxy := httputil.NewSingleHostReverseProxy(dst)
 
-	var letsEncryptManager letsencrypt.Manager
-	if err := letsEncryptManager.CacheFile(state); err != nil {
-		log.Fatal(err)
-	}
-	if register != "" && !letsEncryptManager.Registered() {
-		letsEncryptManager.Register(register, func(terms string) bool {
-			log.Printf("Agreeing to %s ...", terms)
-			return true
-		})
-	}
+	letsEncryptManager := &autocert.Manager{
+            Cache:       autocert.DirCache(state),
+            Prompt:      autocert.AcceptTOS,
+            HostPolicy:  func(ctx context.Context, host string) error { return nil},
+            Email:       register,
+        }
+
 
 	clientCAsPEM, err := ioutil.ReadFile(authenticate)
 	if err != nil {
@@ -138,6 +136,7 @@ func run(register, listenhttp, listenhttps, authenticate, authorize, proxy, stat
 		return nil
 	}
 
+	go func() { log.Fatal(http.ListenAndServe(listenhttp, letsEncryptManager.HTTPHandler(nil))) }()
 	srv := &http.Server{
 		Addr: listenhttps,
 		TLSConfig: &tls.Config{
@@ -155,7 +154,6 @@ func run(register, listenhttp, listenhttps, authenticate, authorize, proxy, stat
 		}),
 	}
 
-	go func() { log.Fatal(http.ListenAndServe(listenhttp, http.HandlerFunc(letsencrypt.RedirectHTTP))) }()
 	log.Fatal(srv.ListenAndServeTLS("", ""))
 }
 
